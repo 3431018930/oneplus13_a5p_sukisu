@@ -1,4 +1,4 @@
-Name: oneplus_13 # 工作流名称，通常与设备型号相关
+name: oneplus_13 # 工作流名称，通常与设备型号相关
 on:
   workflow_dispatch: # 手动触发工作流，可以通过 GitHub UI 界面运行
     inputs: # 允许用户在手动触发时输入参数
