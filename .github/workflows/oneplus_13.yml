@@ -3,9 +3,9 @@ on:
   workflow_dispatch:
     inputs:
       KERNEL_SUFFIX:
-        description: '内核名称修改(可改中文和emoji)'
-        required: true
-        default: '-酷安FutabaWa'
+        description: '内核名称修改（留空则使用官方默认名'
+        required: false # 修改为非必需，允许留空
+        default: '' # 默认值改为空字符串
       KERNEL_TIME:
        description: "内核构建日期更改(默认为原厂)"
        required: true
@@ -25,11 +25,6 @@ on:
        required: false
        default: false
        type: boolean
-      use_default_kernel_name: # 新增的输入参数
-        description: "是否使用官方默认内核名 (6.6.30-android15-8-g013ec21bba94-abogki383916444-4k)"
-        required: false
-        default: false
-        type: boolean
        
 
 jobs:
@@ -241,8 +236,6 @@ jobs:
           echo "CONFIG_CRYPTO_LZ4K=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_CRYPTO_LZ4KD=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_CRYPTO_842=y" >> ./common/arch/arm64/configs/gki_defconfig
-          # CONFIG_LOCALVERSION_AUTO=n 在选择使用官方默认名时，保持为 n
-          # 如果不使用默认名，则此行保持不变，让 KERNEL_SUFFIX 生效
           echo "CONFIG_LOCALVERSION_AUTO=n" >> ./common/arch/arm64/configs/gki_defconfig
 
           # Add BBR
@@ -274,14 +267,15 @@ jobs:
       - name: Set Kernel Name
         run: |
          cd kernel_workspace/kernel_platform
-         # 根据 use_default_kernel_name 决定是否修改内核名称
-         if [ "${{ github.event.inputs.use_default_kernel_name }}" == "true" ]; then
-           # 如果选择使用默认名，则删除 CONFIG_LOCALVERSION 和 LOCALVERSION_AUTO 相关的行
+         # 检查 KERNEL_SUFFIX 是否为空
+         if [ -z "${{ github.event.inputs.KERNEL_SUFFIX }}" ]; then
+           # 如果 KERNEL_SUFFIX 留空，则使用官方默认名
+           # 删除 CONFIG_LOCALVERSION 和 LOCALVERSION_AUTO 相关的行，以保留默认名称
            sed -i '/CONFIG_LOCALVERSION=/d' ./common/arch/arm64/configs/gki_defconfig
            sed -i '/CONFIG_LOCALVERSION_AUTO=/d' ./common/arch/arm64/configs/gki_defconfig
-           echo "使用官方默认内核名: 6.6.30-android15-8-g013ec21bba94-abogki383916444-4k"
+           echo "KERNEL_SUFFIX 留空，将使用官方默认内核名: 6.6.30-android15-8-g013ec21bba94-abogki383916444-4k"
          else
-           # 如果不使用默认名，则应用 KERNEL_SUFFIX
+           # 如果 KERNEL_SUFFIX 不为空，则应用自定义名称
            sed -i 's/${scm_version}//' ./common/scripts/setlocalversion
            sudo sed -i 's/-4k/${{ github.event.inputs.KERNEL_SUFFIX }}/g' ./common/arch/arm64/configs/gki_defconfig
            echo "使用自定义内核名: ${{ github.event.inputs.KERNEL_SUFFIX }}"
