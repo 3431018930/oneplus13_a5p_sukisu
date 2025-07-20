@@ -35,7 +35,7 @@ on:
         required: false
         default: false
         type: boolean
-      enable_susfs: # 新增：是否启用 SUSFS
+      enable_susfs: # 新增：是否启用SukiSU FS (SUSFS)
         description: "是否启用SukiSU FS (SUSFS)"
         required: false
         default: true # 默认启用，您可以根据需要修改
@@ -104,17 +104,17 @@ jobs: # 定义一个或多个作业
           KSU_VERSION=$(expr $(/usr/bin/git rev-list --count main) "+" 10606) # 计算 KSU 版本号
           echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV # 将 KSU 版本号写入 GitHub 环境变量
           export KSU_VERSION=$KSU_VERSION # 导出 KSU 版本号
-          # 检查 setup.bin 是否存在，如果需要，请确保将其添加到您的仓库中
-          # 如果 setup.bin 是 SukiSU 自动生成的或者仅用于特定情况，可能不需要在此处复制
-          # cp "${GITHUB_WORKSPACE}/.github/workflows/setup.bin" ./ # 如果您的仓库中没有，请勿复制
-          # chmod +x setup.bin # 如果复制了，需要添加执行权限
-          # ./setup.bin # 如果复制并需要执行，则取消注释
           
           # 根据 Build_oneplus_sm8750，这里会执行 setup.bin 来修改 Makefile
-          # 如果没有 setup.bin，则恢复到您原先的 sed 命令
-          if [ -f "setup.bin" ]; then
+          # 如果您的仓库中没有 setup.bin，或者其作用不影响 SUSFS 的独立开关，
+          # 且您不想为此单独添加 setup.bin 文件，则保留下面的 sed 命令。
+          # 如果需要 setup.bin，请确保将其放置在 `.github/workflows/` 目录下。
+          if [ -f "${GITHUB_WORKSPACE}/.github/workflows/setup.bin" ]; then
+            cp "${GITHUB_WORKSPACE}/.github/workflows/setup.bin" ./
+            chmod +x setup.bin
             ./setup.bin
           else
+            echo "setup.bin 未找到或不需要，使用 sed 命令修改 Makefile。"
             sed -i "s/DKSU_VERSION=12800/DKSU_VERSION=${KSU_VERSION}/" kernel/Makefile # 修改 KernelSU Makefile 中的版本号
           fi
 
@@ -244,8 +244,12 @@ jobs: # 定义一个或多个作业
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
 
           # Add KPM Configuration Settings
-          if: ${{inputs.enable_feature_x }}
+          if ${{ inputs.enable_feature_x }}; then # 正确的 Shell 脚本 if 语法
             echo "CONFIG_KPM=y" >> ./common/arch/arm64/configs/gki_defconfig
+            echo "已启用 KPM 配置。"
+          else
+            echo "未启用 KPM 配置。"
+          fi
           
           echo "CONFIG_CRYPTO_LZ4HC=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_CRYPTO_LZ4K=y" >> ./common/arch/arm64/configs/gki_defconfig
@@ -254,7 +258,7 @@ jobs: # 定义一个或多个作业
           echo "CONFIG_LOCALVERSION_AUTO=n" >> ./common/arch/arm64/configs/gki_defconfig
 
           # Add BBR
-          if ${{ inputs.enable_bbr }}; then
+          if ${{ inputs.enable_bbr }}; then # 正确的 Shell 脚本 if 语法
             echo "CONFIG_TCP_CONG_ADVANCED=y" >> ./common/arch/arm64/configs/gki_defconfig
             echo "CONFIG_TCP_CONG_BBR=y" >> ./common/arch/arm64/configs/gki_defconfig
             echo "CONFIG_NET_SCH_FQ=y" >> ./common/arch/arm64/configs/gki_defconfig
@@ -269,10 +273,10 @@ jobs: # 定义一个或多个作业
           fi
 
           # Add SUSFS configuration settings (仅在启用 SUSFS 时添加)
-          if ${{ inputs.enable_susfs }}; then
+          if ${{ inputs.enable_susfs }}; then # 正确的 Shell 脚本 if 语法
             echo "CONFIG_KSU_SUSFS=y" >> ./common/arch/arm64/configs/gki_defconfig
             echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> ./common/arch/arm64/configs/gki_defconfig # 注意：这里从 n 改为了 y，与 Build_oneplus_sm8750 保持一致
+            echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> ./common/arch/arm64/configs/gki_defconfig
             echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
             echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
             echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
