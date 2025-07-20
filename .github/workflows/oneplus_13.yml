@@ -1,4 +1,4 @@
-# Name: oneplus_13 # 工作流名称，通常与设备型号相关
+name: oneplus_13 # 工作流名称，通常与设备型号相关
 on:
   workflow_dispatch: # 手动触发工作流，可以通过 GitHub UI 界面运行
     inputs: # 允许用户在手动触发时输入参数
@@ -39,11 +39,6 @@ on:
         description: "是否启用SukiSU FS (SUSFS)"
         required: false
         default: true # 默认启用，您可以根据需要修改
-        type: boolean
-      enable_sus_su_mode: # 新增：SuS SU 模式切换开关
-        description: "是否启用SuS SU模式 (CONFIG_KSU_SUSFS_SUS_SU)"
-        required: false
-        default: false # 默认禁用
         type: boolean
 
 jobs: # 定义一个或多个作业
@@ -241,15 +236,10 @@ jobs: # 定义一个或多个作业
           
           echo "CONFIG_KSU=y" >> $CONFIG_FILE
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> $CONFIG_FILE
-
-          # --- 新增：SuS SU 模式切换 ---
-          if [[ "${{ inputs.enable_sus_su_mode }}" == "true" ]]; then
-            echo "CONFIG_KSU_SUSFS_SUS_SU=y" >> $CONFIG_FILE
-            echo "已启用 SuS SU 模式。"
-          else
-            echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> $CONFIG_FILE
-            echo "已禁用 SuS SU 模式。"
-          fi
+          
+          # --- 默认开启 SuS SU 模式 ---
+          echo "CONFIG_KSU_SUSFS_SUS_SU=y" >> $CONFIG_FILE
+          echo "已默认启用 SuS SU 模式。"
 
           # Add KPM Configuration Settings
           if [[ "${{ inputs.enable_feature_x }}" == "true" ]]; then
@@ -422,4 +412,3 @@ jobs: # 定义一个或多个作业
         with:
          name: AK3_KPM_${{ env.KSUVER }}_oneplus_13_SuKiSU # 修改名称以反映机型和SuKiSU
          path: ./AnyKernel3/*
-
