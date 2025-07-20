@@ -15,10 +15,10 @@ on:
         description: "自定义内核构建日期（示例：Mon Jan 01 00:00:00 UTC 2025，仅在取消勾选'保持原设置'时有效）" # 更新描述
         required: false # 非必需，因为可以由 keep_original_settings 控制
         default: 'Tue Dec 17 23:36:49 UTC 2024' # 默认值不变，但仅在 keep_original_settings 为 false 时才可能生效
-      enable_feature_x: # 是否启用 kpm
-        description: "是否启用kpm" # 输入框描述
+      enable_feature_x: # 是否启用 kpm (此项现在控制是否启用KPM。如果勾选，生成KPM版本；如果取消，生成NoKPM版本)
+        description: "是否启用KPM (勾选则生成含KPM包，取消则生成不含KPM包)" # 更新描述以明确其含义
         required: false # 非必需
-        default: false # 默认值为 false
+        default: true # 默认值为 true，即默认生成含KPM的包
         type: boolean # 类型为布尔值
       enable_feature_y: # 是否启用lz4kd
         description: "是否启用lz4kd" # 输入框描述
@@ -96,14 +96,10 @@ jobs: # 定义一个或多个作业
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/susfs-main/kernel/setup.sh" -o setup.sh && bash setup.sh susfs-main
           
           cd KernelSU # 进入 KernelSU 目录
-          KSU_VERSION=$(expr $(/usr/bin/git rev-list --count main) "+" 10606) # 计算 KSU 版本号
+          KSU_VERSION=$(expr $(/usr/bin/git rev-list --count main) "+" 10700) # 更新基准值，与 Build_oneplus_sm8750 保持一致
           echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV # 将 KSU 版本号写入 GitHub 环境变量
           export KSU_VERSION=$KSU_VERSION # 导出 KSU 版本号
           
-          # 根据 Build_oneplus_sm8750，这里会执行 setup.bin 来修改 Makefile
-          # 如果您的仓库中没有 setup.bin，或者其作用不影响 SUSFS 的独立开关，
-          # 且您不想为此单独添加 setup.bin 文件，则保留下面的 sed 命令。
-          # 如果需要 setup.bin，请确保将其放置在 `.github/workflows/` 目录下。
           if [ -f "${GITHUB_WORKSPACE}/.github/workflows/setup.bin" ]; then
             cp "${GITHUB_WORKSPACE}/.github/workflows/setup.bin" ./
             chmod +x setup.bin
@@ -234,7 +230,7 @@ jobs: # 定义一个或多个作业
           echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
 
           # Add VFS configuration settings
-          echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_KSU_SUSFS_SUS_SU=y" >> ./common/arch/arm64/configs/gki_defconfig
           echo "CONFIG_KSU_MANUAL_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
 
           # Add KPM Configuration Settings
@@ -293,7 +289,7 @@ jobs: # 定义一个或多个作业
       - name: Set Kernel Name # 步骤名称：设置内核名称
         run: |
           cd kernel_workspace/kernel_platform
-          # 针对 oneplus_13 的默认后缀（您可以根据实际情况调整或从其他地方获取）
+          # 针对 oneplus_13 的默认后缀
           DEFAULT_SUFFIX="-android15-8-g013ec21bba94-abogki383916444-4k"
 
           echo "保持原设置: ${{ github.event.inputs.keep_original_settings }}"
@@ -305,21 +301,24 @@ jobs: # 定义一个或多个作业
               NEW_SUFFIX="${{ github.event.inputs.KERNEL_SUFFIX }}"
               echo "使用自定义内核名称: $NEW_SUFFIX"
             else
-              NEW_SUFFIX="$DEFAULT_SUFFIX" # 如果自定义后缀为空，则回退到原始默认后缀
+              NEW_SUFFIX="$DEFAULT_SUFFIX" # 如果自定义后缀为空，则回退到机型默认后缀
               echo "自定义内核名称留空，将使用机型默认后缀: $NEW_SUFFIX"
             fi
+            # 使用 sed 修改或添加 CONFIG_LOCALVERSION
+            ESCAPED_SUFFIX=$(printf '%s\n' "$NEW_SUFFIX" | sed 's:[\/&]:\\&:g')
+            if grep -q "CONFIG_LOCALVERSION=" ./common/arch/arm64/configs/gki_defconfig; then
+                sed -i "s|CONFIG_LOCALVERSION=.*|CONFIG_LOCALVERSION=\"${ESCAPED_SUFFIX}\"|" ./common/arch/arm64/configs/gki_defconfig
+            else
+                echo "CONFIG_LOCALVERSION=\"${ESCAPED_SUFFIX}\"" >> ./common/arch/arm64/configs/gki_defconfig
+            fi
+            sed -i 's/${scm_version}//' ./common/scripts/setlocalversion
+            echo "已设置自定义或默认内核名。"
           else # 如果勾选了“保持原设置”
-            # 删除 CONFIG_LOCALVERSION 和 LOCALVERSION_AUTO 相关的行，以保留默认名称
+            # 删除 CONFIG_LOCALVERSION 和 LOCALVERSION_AUTO 相关的行，以保留官方默认名称
             sed -i '/CONFIG_LOCALVERSION=/d' ./common/arch/arm64/configs/gki_defconfig
             sed -i '/CONFIG_LOCALVERSION_AUTO=/d' ./common/arch/arm64/configs/gki_defconfig
             echo "已勾选 '保持原设置'，将使用官方默认内核名。"
-            NEW_SUFFIX="-4k" # 如果保持原设置，实际替换时需要替换回原始的 -4k 部分
           fi
-          
-          # 替换 -4k 部分为新的后缀
-          ESCAPED_SUFFIX=$(printf '%s\n' "$NEW_SUFFIX" | sed 's:[\/&]:\\&:g')
-          sudo sed -i "s/-4k/${ESCAPED_SUFFIX}/g" ./common/arch/arm64/configs/gki_defconfig
-          sed -i 's/${scm_version}//' ./common/scripts/setlocalversion
 
 
       - name: Add sched_ext # 步骤名称：添加 sched_ext (风驰驱动)
@@ -332,13 +331,16 @@ jobs: # 定义一个或多个作业
          cd common/kernel/sched
 
       - name: Build Kernel # 步骤名称：构建内核
+        env:
+          KEEP_ORIGINAL_SETTINGS: ${{ github.event.inputs.keep_original_settings }}
+          CUSTOM_KERNEL_TIME: ${{ github.event.inputs.KERNEL_TIME }}
         run: |
-          # 只有在未勾选“保持原设置”时才应用自定义构建时间
-          if [ "${{ github.event.inputs.keep_original_settings }}" = "false" ] && [ -n "${{ github.event.inputs.KERNEL_TIME }}" ]; then
-            export KBUILD_BUILD_TIMESTAMP="${{ github.event.inputs.KERNEL_TIME }}" # 设置内核构建时间戳
-            echo "使用自定义内核构建日期: ${{ github.event.inputs.KERNEL_TIME }}"
+          # 设置 KBUILD_BUILD_TIMESTAMP
+          if [ "$KEEP_ORIGINAL_SETTINGS" = "false" ] && [ -n "$CUSTOM_KERNEL_TIME" ]; then
+            export KBUILD_BUILD_TIMESTAMP="$CUSTOM_KERNEL_TIME"
+            echo "使用自定义内核构建日期: $CUSTOM_KERNEL_TIME"
           else
-            # 如果勾选了“保持原设置”或者自定义时间为空，则使用您原 Oneplus 13 工作流中的默认时间
+            # 如果勾选了“保持原设置”或者自定义时间为空，则使用默认时间
             export KBUILD_BUILD_TIMESTAMP="Tue Dec 17 23:36:49 UTC 2024" # 这里写死为原默认时间
             echo "已勾选 '保持原设置' 或自定义时间为空，将使用默认内核构建日期: Tue Dec 17 23:36:49 UTC 2024。"
           fi
@@ -360,7 +362,7 @@ jobs: # 定义一个或多个作业
          mv oImage Image # 将 oImage 重命名为 Image
 
       - name: Make AnyKernel3 (NoKPM) # 步骤名称：生成无 KPM 的 AnyKernel3 刷机包
-        if: ${{inputs.enable_feature_x }} # 仅当 enable_feature_x 为 true 时执行 (如果 enable_feature_x 代表 "生成无KPM"，则应该在KPM补丁之前生成)
+        if: ${{! inputs.enable_feature_x }} # 只有当 enable_feature_x 为 false (即不启用 KPM) 时才执行
         run: |
           git clone https://github.com/Kernel-SU/AnyKernel3.git --depth=1 AnyKernel3_NoKPM
           rm -rf ./AnyKernel3_NoKPM/.git
@@ -368,13 +370,14 @@ jobs: # 定义一个或多个作业
           cp kernel_workspace/kernel_platform/common/out/arch/arm64/boot/Image ./AnyKernel3_NoKPM/
 
       - name: Upload AnyKernel3 (上传NoKPM_AK3包)
-        if: ${{inputs.enable_feature_x }}
+        if: ${{! inputs.enable_feature_x }} # 只有当 enable_feature_x 为 false (即不启用 KPM) 时才执行
         uses: actions/upload-artifact@v4
         with:
           name: AK3_NoKPM_${{ env.KSUVER }}_oneplus_13_SuKiSU # 修改名称以反映机型和SuKiSU
           path: ./AnyKernel3_NoKPM/*
 
       - name: Apply KPM Patch (应用KPM修补补丁) # 确保这一步在生成 KPM 版本的 AnyKernel3 之前
+        if: ${{inputs.enable_feature_x }} # 只有当 enable_feature_x 为 true (即启用 KPM) 时才执行
         run: |
          cd kernel_workspace/kernel_platform/common/out/arch/arm64/boot
          curl -LO https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch/releases/download/0.12.0/patch_linux
@@ -384,6 +387,7 @@ jobs: # 定义一个或多个作业
          mv oImage Image
 
       - name: Make AnyKernel3 (KPM) # 步骤名称：生成有 KPM 的 AnyKernel3 刷机包
+        if: ${{inputs.enable_feature_x }} # 只有当 enable_feature_x 为 true (即启用 KPM) 时才执行
         run: |
          git clone https://github.com/Kernel-SU/AnyKernel3.git --depth=1
          rm -rf ./AnyKernel3/.git
@@ -391,7 +395,9 @@ jobs: # 定义一个或多个作业
          cp kernel_workspace/kernel_platform/common/out/arch/arm64/boot/Image ./AnyKernel3/
 
       - name: Upload AnyKernel3 (上传 KPM_AK3包)
+        if: ${{inputs.enable_feature_x }} # 只有当 enable_feature_x 为 true (即启用 KPM) 时才执行
         uses: actions/upload-artifact@v4
         with:
          name: AK3_KPM_${{ env.KSUVER }}_oneplus_13_SuKiSU # 修改名称以反映机型和SuKiSU
          path: ./AnyKernel3/*
+
