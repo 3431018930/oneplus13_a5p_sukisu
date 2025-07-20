@@ -20,7 +20,7 @@ on:
         required: false # 非必需
         default: false # 默认值为 false
         type: boolean # 类型为布尔值
-      enable_feature_y: # 是否启用 lz4kd
+      enable_feature_y: # 是否启用lz4kd
         description: "是否启用lz4kd" # 输入框描述
         required: false # 非必需
         default: false # 默认值为 false
@@ -30,6 +30,11 @@ on:
         required: false # 非必需
         default: false # 默认值为 false
         type: boolean # 类型为布尔值
+      enable_bbr: # 新增的BBR控制开关
+        description: "是否启用BBR拥塞控制算法"
+        required: false
+        default: false
+        type: boolean
 
 jobs: # 定义一个或多个作业
   build: # 作业名称：构建
@@ -241,14 +246,19 @@ jobs: # 定义一个或多个作业
           echo "CONFIG_LOCALVERSION_AUTO=n" >> ./common/arch/arm64/configs/gki_defconfig # 关闭自动本地版本
 
           # Add BBR (添加 BBR 拥塞控制算法)
-          echo "CONFIG_TCP_CONG_ADVANCED=y" >> ./common/arch/arm64/configs/gki_defconfig # 启用高级 TCP 拥塞控制
-          echo "CONFIG_TCP_CONG_BBR=y" >> ./common/arch/arm64/configs/gki_defconfig # 启用 BBR
-          echo "CONFIG_NET_SCH_FQ=y" >> ./common/arch/arm64/configs/gki_defconfig # 启用公平队列调度器
-          echo "CONFIG_TCP_CONG_BIC=n" >> ./common/arch/arm64/configs/gki_defconfig # 禁用 BIC
-          echo "CONFIG_TCP_CONG_CUBIC=n" >> ./common/arch/arm64/configs/gki_defconfig # 禁用 CUBIC
-          echo "CONFIG_TCP_CONG_WESTWOOD=n" >> ./common/arch/arm64/configs/gki_defconfig # 禁用 WESTWOOD
-          echo "CONFIG_TCP_CONG_HTCP=n" >> ./common/arch/arm64/configs/gki_defconfig # 禁用 HTCP
-          echo "CONFIG_DEFAULT_TCP_CONG=bbr" >> ./common/arch/arm64/configs/gki_defconfig # 设置默认 TCP 拥塞控制算法为 BBR
+          if ${{ inputs.enable_bbr }}; then # 仅当 enable_bbr 为 true 时才添加 BBR 相关配置
+            echo "CONFIG_TCP_CONG_ADVANCED=y" >> ./common/arch/arm64/configs/gki_defconfig # 启用高级 TCP 拥塞控制
+            echo "CONFIG_TCP_CONG_BBR=y" >> ./common/arch/arm64/configs/gki_defconfig # 启用 BBR
+            echo "CONFIG_NET_SCH_FQ=y" >> ./common/arch/arm64/configs/gki_defconfig # 启用公平队列调度器
+            echo "CONFIG_TCP_CONG_BIC=n" >> ./common/arch/arm64/configs/gki_defconfig # 禁用 BIC
+            echo "CONFIG_TCP_CONG_CUBIC=n" >> ./common/arch/arm64/configs/gki_defconfig # 禁用 CUBIC
+            echo "CONFIG_TCP_CONG_WESTWOOD=n" >> ./common/arch/arm64/configs/gki_defconfig # 禁用 WESTWOOD
+            echo "CONFIG_TCP_CONG_HTCP=n" >> ./common/arch/arm64/configs/gki_defconfig # 禁用 HTCP
+            echo "CONFIG_DEFAULT_TCP_CONG=bbr" >> ./common/arch/arm64/configs/gki_defconfig # 设置默认 TCP 拥塞控制算法为 BBR
+            echo "已启用 BBR 拥塞控制算法。"
+          else
+            echo "未启用 BBR 拥塞控制算法。"
+          fi
 
           #Remove check_defconfig (移除 check_defconfig 检查)
           sudo sed -i 's/check_defconfig//' ./common/build.config.gki # 从 build.config.gki 文件中移除 check_defconfig
@@ -307,4 +317,29 @@ jobs: # 定义一个或多个作业
           fi
           export PATH="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin:$PATH" # 添加 Clang 编译器路径到 PATH
           export PATH="/usr/lib/ccache:$PATH" # 添加 ccache 路径到 PATH
-          sudo apt install libelf-dev #
+          sudo apt install libelf-dev # 安装 libelf-dev
+          cd kernel_workspace/kernel_platform/common # 进入 common 目录
+          # 执行内核编译命令
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang RUSTC=../../prebuilts/rust/linux-x86/1.73.0b/bin/rustc PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole LD=ld.lld  HOSTLD=ld.lld O=out KCFLAGS+=-O2 gki_defconfig all
+
+      - name: Apply Linux Patch # 步骤名称：应用 Linux 补丁
+        run: |
+          cd kernel_workspace/kernel_platform/common/out/arch/arm64/boot # 进入输出目录
+          curl -LO https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch/releases/download/0.12.0/patch_linux # 下载 patch_linux 工具
+          chmod +x patch_linux # 添加执行权限
+          ./patch_linux # 执行补丁工具
+          rm -f Image # 移除原始 Image 文件
+          mv oImage Image # 将 oImage 重命名为 Image
+
+      - name: Make AnyKernel3 # 步骤名称：生成 AnyKernel3 刷机包
+        run: |
+          git clone https://github.com/Kernel-SU/AnyKernel3.git --depth=1 # 克隆 AnyKernel3 仓库，只克隆一层深度
+          rm -rf ./AnyKernel3/.git # 移除 .git 目录
+          rm -rf ./AnyKernel3/push.sh # 移除 push.sh 脚本
+          cp kernel_workspace/kernel_platform/common/out/arch/arm64/boot/Image ./AnyKernel3/ # 复制编译好的 Image 文件到 AnyKernel3 目录
+
+      - name: Upload AnyKernel3 # 步骤名称：上传 AnyKernel3 刷机包
+        uses: actions/upload-artifact@v4 # 使用 GitHub Actions 上传 artifact Action
+        with:
+          name: SuKiSu_${{ env.KSUVER }}_oneplus_13 # 上传的 artifact 名称，包含 KernelSU 版本号和设备型号
+          path: ./AnyKernel3/* # 指定上传的路径
