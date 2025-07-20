@@ -1,4 +1,4 @@
-name: oneplus_13 # 工作流名称，通常与设备型号相关
+# Name: oneplus_13 # 工作流名称，通常与设备型号相关
 on:
   workflow_dispatch: # 手动触发工作流，可以通过 GitHub UI 界面运行
     inputs: # 允许用户在手动触发时输入参数
@@ -39,6 +39,11 @@ on:
         description: "是否启用SukiSU FS (SUSFS)"
         required: false
         default: true # 默认启用，您可以根据需要修改
+        type: boolean
+      enable_sus_su_mode: # 新增：SuS SU 模式切换开关
+        description: "是否启用SuS SU模式 (CONFIG_KSU_SUSFS_SUS_SU)"
+        required: false
+        default: false # 默认禁用
         type: boolean
 
 jobs: # 定义一个或多个作业
@@ -95,22 +100,22 @@ jobs: # 定义一个或多个作业
          rm kernel_platform/common/android/abi_gki_protected_exports_* || echo "No protected exports!"
          rm kernel_platform/msm-kernel/android/abi_gki_protected_exports_* || echo "No protected exports!"
 
-      - name: Set up SukiSU # 步骤名称：设置 SukiSU (KernelSU 的基础部分，通常不需要开关)
+      - name: Set up SukiSU and KernelSU Version # 步骤名称：设置 SukiSU 并获取正确的 KernelSU 版本
         run: |
           cd kernel_workspace/kernel_platform # 进入内核平台目录
           # 使用 `Build_oneplus_sm8750` 中的 SukiSU Ultra setup 方式
           curl -LSs "https://raw.githubusercontent.com/SukiSU-Ultra/SukiSU-Ultra/susfs-main/kernel/setup.sh" -o setup.sh && bash setup.sh susfs-main
           
-          cd KernelSU # 进入 KernelSU 目录
-          KSU_VERSION=$(expr $(/usr/bin/git rev-list --count main) "+" 10606) # 计算 KSU 版本号
+          # --- 修复 KernelSU 版本号 ---
+          # 克隆官方 KernelSU 仓库以获取最新提交数
+          git clone https://github.com/tiann/KernelSU.git --depth=1 /tmp/KernelSU
+          # 计算正确的 KSU 版本号 (官方标准: 10200 + 提交数)
+          KSU_COMMIT_COUNT=$(git -C /tmp/KernelSU rev-list --count main)
+          KSU_VERSION=$((10200 + KSU_COMMIT_COUNT))
           echo "KSUVER=$KSU_VERSION" >> $GITHUB_ENV # 将 KSU 版本号写入 GitHub 环境变量
-          export KSU_VERSION=$KSU_VERSION # 导出 KSU 版本号
+          echo "成功获取最新 KernelSU 版本号: $KSU_VERSION"
           
-          # 根据 Build_oneplus_sm8750，这里会执行 setup.bin 来修改 Makefile
-          # 如果您的仓库中没有 setup.bin，或者其作用不影响 SUSFS 的独立开关，
-          # 且您不想为此单独添加 setup.bin 文件，则保留下面的 sed 命令。
-          # 如果需要 setup.bin，请确保将其放置在 `.github/workflows/` 目录下。
-          echo "setup.bin 未找到或不需要，使用 sed 命令修改 Makefile。"
+          cd KernelSU # 进入 KernelSU 目录
           sed -i "s/DKSU_VERSION=12800/DKSU_VERSION=${KSU_VERSION}/" kernel/Makefile # 修改 KernelSU Makefile 中的版本号
 
       - name: Set up SUSFS (配置 SUSFS) # 步骤名称：设置 susfs，根据 enable_susfs 开关控制
@@ -232,58 +237,66 @@ jobs: # 定义一个或多个作业
       - name: Add Configuration Settings (设置编译配置) # 修改了步骤名称，使其更通用
         run: |
           cd kernel_workspace/kernel_platform
-          echo "CONFIG_KSU=y" >> ./common/arch/arm64/configs/gki_defconfig
+          CONFIG_FILE="./common/arch/arm64/configs/gki_defconfig"
+          
+          echo "CONFIG_KSU=y" >> $CONFIG_FILE
+          echo "CONFIG_KSU_MANUAL_HOOK=y" >> $CONFIG_FILE
 
-          # Add VFS configuration settings
-          echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> ./common/arch/arm64/configs/gki_defconfig
-          echo "CONFIG_KSU_MANUAL_HOOK=y" >> ./common/arch/arm64/configs/gki_defconfig
+          # --- 新增：SuS SU 模式切换 ---
+          if [[ "${{ inputs.enable_sus_su_mode }}" == "true" ]]; then
+            echo "CONFIG_KSU_SUSFS_SUS_SU=y" >> $CONFIG_FILE
+            echo "已启用 SuS SU 模式。"
+          else
+            echo "CONFIG_KSU_SUSFS_SUS_SU=n" >> $CONFIG_FILE
+            echo "已禁用 SuS SU 模式。"
+          fi
 
           # Add KPM Configuration Settings
-          if ${{ inputs.enable_feature_x }}; then # 正确的 Shell 脚本 if 语法
-            echo "CONFIG_KPM=y" >> ./common/arch/arm64/configs/gki_defconfig
+          if [[ "${{ inputs.enable_feature_x }}" == "true" ]]; then
+            echo "CONFIG_KPM=y" >> $CONFIG_FILE
             echo "已启用 KPM 配置。"
           else
             echo "未启用 KPM 配置。"
           fi
           
-          echo "CONFIG_CRYPTO_LZ4HC=y" >> ./common/arch/arm64/configs/gki_defconfig
-          echo "CONFIG_CRYPTO_LZ4K=y" >> ./common/arch/arm64/configs/gki_defconfig
-          echo "CONFIG_CRYPTO_LZ4KD=y" >> ./common/arch/arm64/configs/gki_defconfig
-          echo "CONFIG_CRYPTO_842=y" >> ./common/arch/arm64/configs/gki_defconfig
-          echo "CONFIG_LOCALVERSION_AUTO=n" >> ./common/arch/arm64/configs/gki_defconfig
+          echo "CONFIG_CRYPTO_LZ4HC=y" >> $CONFIG_FILE
+          echo "CONFIG_CRYPTO_LZ4K=y" >> $CONFIG_FILE
+          echo "CONFIG_CRYPTO_LZ4KD=y" >> $CONFIG_FILE
+          echo "CONFIG_CRYPTO_842=y" >> $CONFIG_FILE
+          echo "CONFIG_LOCALVERSION_AUTO=n" >> $CONFIG_FILE
 
           # Add BBR
-          if ${{ inputs.enable_bbr }}; then # 正确的 Shell 脚本 if 语法
-            echo "CONFIG_TCP_CONG_ADVANCED=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_TCP_CONG_BBR=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_NET_SCH_FQ=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_TCP_CONG_BIC=n" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_TCP_CONG_CUBIC=n" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_TCP_CONG_WESTWOOD=n" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_TCP_CONG_HTCP=n" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_DEFAULT_TCP_CONG=bbr" >> ./common/arch/arm64/configs/gki_defconfig
+          if [[ "${{ inputs.enable_bbr }}" == "true" ]]; then
+            echo "CONFIG_TCP_CONG_ADVANCED=y" >> $CONFIG_FILE
+            echo "CONFIG_TCP_CONG_BBR=y" >> $CONFIG_FILE
+            echo "CONFIG_NET_SCH_FQ=y" >> $CONFIG_FILE
+            echo "CONFIG_TCP_CONG_BIC=n" >> $CONFIG_FILE
+            echo "CONFIG_TCP_CONG_CUBIC=n" >> $CONFIG_FILE
+            echo "CONFIG_TCP_CONG_WESTWOOD=n" >> $CONFIG_FILE
+            echo "CONFIG_TCP_CONG_HTCP=n" >> $CONFIG_FILE
+            echo "CONFIG_DEFAULT_TCP_CONG=bbr" >> $CONFIG_FILE
             echo "已启用 BBR 拥塞控制算法。"
           else
             echo "未启用 BBR 拥塞控制算法。"
           fi
 
           # Add SUSFS configuration settings (仅在启用 SUSFS 时添加)
-          if ${{ inputs.enable_susfs }}; then # 正确的 Shell 脚本 if 语法
-            echo "CONFIG_KSU_SUSFS=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> ./common/arch/arm64/configs/gki_defconfig
-            echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> ./common/arch/arm64/configs/gki_defconfig
+          if [[ "${{ inputs.enable_susfs }}" == "true" ]]; then
+            echo "CONFIG_KSU_SUSFS=y" >> $CONFIG_FILE
+            echo "CONFIG_KSU_SUSFS_HAS_MAGIC_MOUNT=y" >> $CONFIG_FILE
+            echo "CONFIG_KSU_SUSFS_SUS_PATH=y" >> $CONFIG_FILE
+            echo "CONFIG_KSU_SUSFS_SUS_MOUNT=y" >> $CONFIG_FILE
+            echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_KSU_DEFAULT_MOUNT=y" >> $CONFIG_FILE
+            echo "CONFIG_KSU_SUSFS_AUTO_ADD_SUS_BIND_MOUNT=y" >> $CONFIG_FILE
+            echo "CONFIG_KSU_SUSFS_SUS_KSTAT=y" >> $CONFIG_FILE
+            echo "CONFIG_KSU_SUSFS_SUS_OVERLAYFS=n" >> $CONFIG_FILE
+            echo "CONFIG_KSU_SUSFS_TRY_UMOUNT=y" >> $CONFIG_FILE
+            echo "CONFIG_KSU_SUSFS_AUTO_ADD_TRY_UMOUNT_FOR_BIND_MOUNT=y" >> $CONFIG_FILE
+            echo "CONFIG_KSU_SUSFS_SPOOF_UNAME=y" >> $CONFIG_FILE
+            echo "CONFIG_KSU_SUSFS_ENABLE_LOG=y" >> $CONFIG_FILE
+            echo "CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS=y" >> $CONFIG_FILE
+            echo "CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG=y" >> $CONFIG_FILE
+            echo "CONFIG_KSU_SUSFS_OPEN_REDIRECT=y" >> $CONFIG_FILE
             echo "已启用 SukiSU FS (SUSFS) 配置。"
           else
             echo "未启用 SukiSU FS (SUSFS) 配置。"
@@ -350,11 +363,16 @@ jobs: # 定义一个或多个作业
           fi
           export PATH="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin:$PATH" # 添加 Clang 编译器路径到 PATH
           export PATH="/usr/lib/ccache:$PATH" # 添加 ccache 路径到 PATH
-          # libelf-dev 已在 Install dependencies 步骤中安装，此处移除冗余
+          
           cd kernel_workspace/kernel_platform/common # 进入 common 目录
           # 执行内核编译命令 (gki_defconfig 和 Image 分两步编译更健壮)
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang RUSTC=../../prebuilts/rust/linux-x86/1.73.0b/bin/rustc PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole LD=ld.lld  HOSTLD=ld.lld O=out KCFLAGS+=-O2 gki_defconfig all # 先配置defconfig
-          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang RUSTC=../../prebuilts/rust/linux-x86/1.73.0b/bin/rustc PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole LD=ld.lld  HOSTLD=ld.lld O=out KCFLAGS+=-O2 Image # 后编译Image
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang RUSTC=../../prebuilts/rust/linux-x86/1.73.0b/bin/rustc PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole LD=ld.lld  HOSTLD=ld.lld O=out KCFLAGS+=-O2 gki_defconfig
+          make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang RUSTC=../../prebuilts/rust/linux-x86/1.73.0b/bin/rustc PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole LD=ld.lld  HOSTLD=ld.lld O=out KCFLAGS+=-O2 Image all
+          
+          # --- 新增：打印 ccache 统计信息 ---
+          echo "--- ccache statistics ---"
+          ccache -s
+          echo "-------------------------"
 
       - name: Apply Linux Patch # 步骤名称：应用 Linux 补丁
         run: |
@@ -404,3 +422,4 @@ jobs: # 定义一个或多个作业
         with:
          name: AK3_KPM_${{ env.KSUVER }}_oneplus_13_SuKiSU # 修改名称以反映机型和SuKiSU
          path: ./AnyKernel3/*
+
