@@ -1,4 +1,4 @@
-name: oneplus_13 # 工作流名称，通常与设备型号相关
+Name: oneplus_13 # 工作流名称，通常与设备型号相关
 on:
   workflow_dispatch: # 手动触发工作流，可以通过 GitHub UI 界面运行
     inputs: # 允许用户在手动触发时输入参数
@@ -49,7 +49,7 @@ jobs: # 定义一个或多个作业
       CCACHE_NOHASHDIR: "true" # ccache 不对目录进行哈希处理
       CCACHE_HARDLINK: "true" # ccache 使用硬链接
       CCACHE_DIR: /home/runner/.ccache # ccache 缓存目录
-      CCACHE_MAXSIZE: 8G # ccache 最大缓存大小
+      CCACHE_MAXSIZE: 10G # ccache 最大缓存大小，从 8G 提高到 10G
     steps: # 作业中的一系列步骤
       - name: Maximize build space # 步骤名称：最大化构建空间
         uses: easimon/maximize-build-space@master # 使用第三方 Action 来清理并增加构建空间
@@ -69,14 +69,15 @@ jobs: # 定义一个或多个作业
       - name: Install dependencies # 步骤名称：安装依赖
         run: |
           sudo apt update && sudo apt upgrade -y # 更新并升级 apt 包列表
-          sudo apt install -y python3 git curl # 安装 python3, git, curl
-          sudo apt install -y python3 git curl ccache # 再次安装以确保 ccache 被安装
+          # 合并安装命令，避免重复
+          sudo apt install -y python3 git curl ccache libelf-dev
 
       - name: Restore ccache # 步骤名称：恢复 ccache 缓存
         uses: actions/cache@v3 # 使用 GitHub Actions 缓存 Action
         with:
           path: /home/runner/.ccache # ccache 缓存路径
-          key: ccache-${{ runner.os }}-${{ github.ref }} # 缓存键，根据操作系统和 Git 引用生成
+          # 优化缓存键，使其更稳定，增加命中率
+          key: ccache-${{ runner.os }}-${{ hashFiles('kernel_workspace/kernel_platform/common/build.config.gki') }}-${{ hashFiles('kernel_workspace/kernel_platform/common/arch/arm64/configs/gki_defconfig') }}
           restore-keys: | # 恢复缓存的备用键
             ccache-${{ runner.os }}-
 
@@ -109,14 +110,8 @@ jobs: # 定义一个或多个作业
           # 如果您的仓库中没有 setup.bin，或者其作用不影响 SUSFS 的独立开关，
           # 且您不想为此单独添加 setup.bin 文件，则保留下面的 sed 命令。
           # 如果需要 setup.bin，请确保将其放置在 `.github/workflows/` 目录下。
-          if [ -f "${GITHUB_WORKSPACE}/.github/workflows/setup.bin" ]; then
-            cp "${GITHUB_WORKSPACE}/.github/workflows/setup.bin" ./
-            chmod +x setup.bin
-            ./setup.bin
-          else
-            echo "setup.bin 未找到或不需要，使用 sed 命令修改 Makefile。"
-            sed -i "s/DKSU_VERSION=12800/DKSU_VERSION=${KSU_VERSION}/" kernel/Makefile # 修改 KernelSU Makefile 中的版本号
-          fi
+          echo "setup.bin 未找到或不需要，使用 sed 命令修改 Makefile。"
+          sed -i "s/DKSU_VERSION=12800/DKSU_VERSION=${KSU_VERSION}/" kernel/Makefile # 修改 KernelSU Makefile 中的版本号
 
       - name: Set up SUSFS (配置 SUSFS) # 步骤名称：设置 susfs，根据 enable_susfs 开关控制
         if: ${{ inputs.enable_susfs }} # <-- SUSFS 开关
@@ -317,18 +312,20 @@ jobs: # 定义一个或多个作业
               NEW_SUFFIX="$DEFAULT_SUFFIX" # 如果自定义后缀为空，则回退到原始默认后缀
               echo "自定义内核名称留空，将使用机型默认后缀: $NEW_SUFFIX"
             fi
+            # 当不保持原始设置时，我们希望修改 -4k 部分
+            ESCAPED_SUFFIX=$(printf '%s\n' "$NEW_SUFFIX" | sed 's:[\/&]:\\&:g')
+            sudo sed -i "s/-4k/${ESCAPED_SUFFIX}/g" ./common/arch/arm64/configs/gki_defconfig
+            # 这一行应该只在需要自定义后缀时才移除 scm_version，否则会影响默认名
+            sed -i 's/${scm_version}//' ./common/scripts/setlocalversion
           else # 如果勾选了“保持原设置”
-            # 删除 CONFIG_LOCALVERSION 和 LOCALVERSION_AUTO 相关的行，以保留默认名称
+            # 删除 CONFIG_LOCALVERSION，但保留 CONFIG_LOCALVERSION_AUTO=n，以确保内核名由 SCM_VERSION 决定
             sed -i '/CONFIG_LOCALVERSION=/d' ./common/arch/arm64/configs/gki_defconfig
-            sed -i '/CONFIG_LOCALVERSION_AUTO=/d' ./common/arch/arm64/configs/gki_defconfig
-            echo "已勾选 '保持原设置'，将使用官方默认内核名。"
-            NEW_SUFFIX="-4k" # 如果保持原设置，实际替换时需要替换回原始的 -4k 部分
+            # 由于 CONFIG_LOCALVERSION_AUTO 已经在 Add Configuration Settings 步骤中设置为 n
+            # 这里不需要重复设置或删除，确保其行为是正确的。
+            # 如果期望通过 SCM_VERSION 生成动态内核名，则不能删除 SCM_VERSION。
+            echo "已勾选 '保持原设置'，将使用官方默认内核名 (包含 SCM 版本信息)。"
+            # 此时不需要对 -4k 进行替换，因为内核名将由编译系统自动生成，包含 Git ID
           fi
-          
-          # 替换 -4k 部分为新的后缀
-          ESCAPED_SUFFIX=$(printf '%s\n' "$NEW_SUFFIX" | sed 's:[\/&]:\\&:g')
-          sudo sed -i "s/-4k/${ESCAPED_SUFFIX}/g" ./common/arch/arm64/configs/gki_defconfig
-          sed -i 's/${scm_version}//' ./common/scripts/setlocalversion
 
 
       - name: Add sched_ext # 步骤名称：添加 sched_ext (风驰驱动)
@@ -353,7 +350,7 @@ jobs: # 定义一个或多个作业
           fi
           export PATH="$GITHUB_WORKSPACE/kernel_workspace/kernel_platform/prebuilts/clang/host/linux-x86/clang-r510928/bin:$PATH" # 添加 Clang 编译器路径到 PATH
           export PATH="/usr/lib/ccache:$PATH" # 添加 ccache 路径到 PATH
-          sudo apt install libelf-dev # 安装 libelf-dev
+          # libelf-dev 已在 Install dependencies 步骤中安装，此处移除冗余
           cd kernel_workspace/kernel_platform/common # 进入 common 目录
           # 执行内核编译命令 (gki_defconfig 和 Image 分两步编译更健壮)
           make -j$(nproc --all) LLVM=1 ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- CC=clang RUSTC=../../prebuilts/rust/linux-x86/1.73.0b/bin/rustc PAHOLE=../../prebuilts/kernel-build-tools/linux-x86/bin/pahole LD=ld.lld  HOSTLD=ld.lld O=out KCFLAGS+=-O2 gki_defconfig all # 先配置defconfig
@@ -369,7 +366,7 @@ jobs: # 定义一个或多个作业
          mv oImage Image # 将 oImage 重命名为 Image
 
       - name: Make AnyKernel3 (NoKPM) # 步骤名称：生成无 KPM 的 AnyKernel3 刷机包
-        if: ${{inputs.enable_feature_x }} # 仅当 enable_feature_x 为 true 时执行 (如果 enable_feature_x 代表 "生成无KPM"，则应该在KPM补丁之前生成)
+        if: ${{ !inputs.enable_feature_x }} # 修改条件：仅在未启用 KPM 时执行
         run: |
           git clone https://github.com/Kernel-SU/AnyKernel3.git --depth=1 AnyKernel3_NoKPM
           rm -rf ./AnyKernel3_NoKPM/.git
@@ -377,13 +374,14 @@ jobs: # 定义一个或多个作业
           cp kernel_workspace/kernel_platform/common/out/arch/arm64/boot/Image ./AnyKernel3_NoKPM/
 
       - name: Upload AnyKernel3 (上传NoKPM_AK3包)
-        if: ${{inputs.enable_feature_x }}
+        if: ${{ !inputs.enable_feature_x }} # 修改条件：仅在未启用 KPM 时执行
         uses: actions/upload-artifact@v4
         with:
           name: AK3_NoKPM_${{ env.KSUVER }}_oneplus_13_SuKiSU # 修改名称以反映机型和SuKiSU
           path: ./AnyKernel3_NoKPM/*
 
       - name: Apply KPM Patch (应用KPM修补补丁) # 确保这一步在生成 KPM 版本的 AnyKernel3 之前
+        if: ${{ inputs.enable_feature_x }} # 添加条件：仅在启用 KPM 时执行
         run: |
          cd kernel_workspace/kernel_platform/common/out/arch/arm64/boot
          curl -LO https://github.com/SukiSU-Ultra/SukiSU_KernelPatch_patch/releases/download/0.12.0/patch_linux
@@ -393,6 +391,7 @@ jobs: # 定义一个或多个作业
          mv oImage Image
 
       - name: Make AnyKernel3 (KPM) # 步骤名称：生成有 KPM 的 AnyKernel3 刷机包
+        if: ${{ inputs.enable_feature_x }} # 添加条件：仅在启用 KPM 时执行
         run: |
          git clone https://github.com/Kernel-SU/AnyKernel3.git --depth=1
          rm -rf ./AnyKernel3/.git
@@ -400,6 +399,7 @@ jobs: # 定义一个或多个作业
          cp kernel_workspace/kernel_platform/common/out/arch/arm64/boot/Image ./AnyKernel3/
 
       - name: Upload AnyKernel3 (上传 KPM_AK3包)
+        if: ${{ inputs.enable_feature_x }} # 添加条件：仅在启用 KPM 时执行
         uses: actions/upload-artifact@v4
         with:
          name: AK3_KPM_${{ env.KSUVER }}_oneplus_13_SuKiSU # 修改名称以反映机型和SuKiSU
