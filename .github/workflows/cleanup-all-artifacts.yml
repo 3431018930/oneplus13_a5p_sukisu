@@ -1,0 +1,29 @@
+# 工作流的名称，会显示在 Actions 列表中
+name: 每日构建产物清理
+
+on:
+  # 模式一：手动触发
+  # 这会在 Actions 页面为此工作流添加一个 "Run workflow" 按钮
+  workflow_dispatch:
+
+  # 模式二：定时自动触发
+  schedule:
+    # cron 表达式，表示在每天的 UTC 时间 0点0分 运行
+    - cron: '0 0 * * *'
+
+jobs:
+  # 定义一个名为 "cleanup-old-artifacts" 的任务
+  cleanup-old-artifacts:
+    # 指定任务运行的环境
+    runs-on: ubuntu-latest
+    
+    # 任务包含的步骤
+    steps:
+      # 步骤一：删除旧的构建产物
+      - name: 删除7天前的构建产物
+        # 使用社区提供的 Action 来执行清理操作
+        uses: c-hive/gha-remove-artifacts@v1
+        with:
+          # 设置保留时长。所有早于这个时间的产物都将被删除。
+          # 你可以根据需要修改，例如：'3 days' (3天), '1 week' (1周), '1 month' (1个月)
+          age: '7 days'
